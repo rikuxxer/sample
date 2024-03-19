@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": "../../../AppData/Local/Programs/Microsoft VS Code"
+		},
+		{
+			"path": "."
+		}
+	],
+	"launch": {
+		"version": "0.2.0",
+		"configurations": [
+			
+
+		]
+	}
+}
