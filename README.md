@@ -10,7 +10,8 @@
 |------|------|------|
 | 取引先管理表 | 各会社毎の取引先を管理するGoogleスプレッドシート（現状）。取引先コードは**会社ごと**に発行される | 取引先管理シート／販売管理シート／媒体支払シート／ビジネス開発用シートを含む |
 | 全社リスト | 法務が管理する「取引先別売掛金残高表全社統合」。**1企業1行・法人番号**で管理 | 取引先確認BOTの元データ。列に取引先名・郵便番号・住所・代表者名・法人番号・与信格付け・関連当事者該当性・ワークフローNo 等を含む |
-| To-Be | 上記を**単一の取引先マスタ（DB）**に統合する。申請ナビ・バクラク・会計・BOTはすべてこのDBを参照または連携する想定 | |
+| 申請ナビ | 取引先申請・法務審査・アカウント開設などのワークフローを統合するWebアプリケーション（To-Beの中核システム） | 申請の入力窓口を統一し、判定・チェック・チケット下書きを自動化する。営業（申請者）・法務・進行・管理者の4ロールで利用。本DB案のデータはすべて申請ナビを通じて登録・参照される想定 |
+| To-Be | 取引先管理表と全社リストを**単一の取引先マスタ（DB）**に統合する。申請ナビ・バクラク・会計・BOTはすべてこのDBを参照または連携する想定 | |
 | 取引先コード | 会社（MA, E, Cory 等）ごとに発行される内部管理コード。同じ法人でも会社が異なれば別コード | OBICとの連携キー |
 | 代理店コード | 債権奉行で発番する代理店の識別コード。販売管理シートで管理 | 取引先コードとは別概念 |
 | 代理店ID | 販売管理シート上で進行管理Gが採番する ID | 代理店コードと併せて管理 |
@@ -231,30 +232,30 @@ erDiagram
 ```mermaid
 flowchart LR
   subgraph now [現状: スプレッドシートが分散]
-    GSSLegal["全社リスト\n管理: 法務部\n粒度: 1企業1行\nキー: 法人番号"]
-    GSSVendor["取引先管理表\n管理: 経理 / 進行\n粒度: 1企業で複数行\nキー: 取引先コード"]
-    GSSBranch["枝番管理シート\n管理: 進行\n請求先が複数ある場合"]
-    GSSAnti["反社チェックリスト\n管理: 法務部\nroborobo結果を転記"]
-    GSSCredit["与信チェックリスト\n管理: 法務部\nリスクモンスター結果を転記"]
+    GSSLegal["全社リスト（法務部管理・1企業1行）"]
+    GSSVendor["取引先管理表（経理/進行管理・複数行）"]
+    GSSBranch["枝番管理シート（進行管理）"]
+    GSSAnti["反社チェックリスト（法務部管理）"]
+    GSSCredit["与信チェックリスト（法務部管理）"]
   end
 
   subgraph tobe [To-Be: 1つのDBに統合]
-    Vendor["Vendor\n法人マスタ\n1企業1行"]
-    CVC["CompanyVendorCode\n会社別取引先コード"]
-    TR["TransactionRelation\n取引関係\n用途別に複数行"]
-    Agency["Agency\n代理店マスタ"]
-    BR["BillingRelation\n請求関係"]
-    BD["BillingDestination\n請求先・枝番"]
-    AC["AntisocialCheck\n反社チェック履歴"]
-    CC["CreditCheck\n与信チェック履歴"]
-    UR["UnpaidRecord\n未入金記録"]
-    CBD["ContractByDept\n事業部別契約"]
-    VH["VendorHistory\n変更履歴"]
+    Vendor["Vendor 法人マスタ"]
+    CVC["CompanyVendorCode 会社別コード"]
+    TR["TransactionRelation 取引関係"]
+    Agency["Agency 代理店マスタ"]
+    BR["BillingRelation 請求関係"]
+    BD["BillingDestination 請求先・枝番"]
+    AC["AntisocialCheck 反社チェック履歴"]
+    CC["CreditCheck 与信チェック履歴"]
+    UR["UnpaidRecord 未入金記録"]
+    CBD["ContractByDept 事業部別契約"]
+    VH["VendorHistory 変更履歴"]
   end
 
   GSSLegal -->|"法人情報"| Vendor
   GSSLegal -->|"与信・サイト"| TR
-  GSSLegal -->|"代理店/直販の●"| CBD
+  GSSLegal -->|"代理店/直販"| CBD
   GSSVendor -->|"取引先コード"| CVC
   GSSVendor -->|"用途別の行"| TR
   GSSVendor -->|"販売管理の代理店"| Agency
@@ -262,7 +263,7 @@ flowchart LR
   GSSBranch -->|"枝番・請求先"| BD
   GSSAnti -->|"反社結果"| AC
   GSSCredit -->|"与信結果"| CC
-  GSSLegal -->|"V列W列"| UR
+  GSSLegal -->|"未入金V列W列"| UR
 ```
 
 ### 3.1 設計方針
@@ -608,13 +609,156 @@ Vendor（法人マスタ）の**変更履歴**を記録するテーブル。社�
 
 ---
 
-### 3.14 Case（案件）/ Task（作業）
+### 3.14 Case（案件）
 
 #### このテーブルは何か
 
-**Case** は申請ナビ上の申請案件（新規取引先申請・与信審査申請・アカウント開設申請など）を管理するテーブル。**Task** は案件に紐づく個々の作業（反社チェック・与信審査・Ads開設・請求設定など）を管理するテーブル。
+申請ナビ上の**申請案件**を管理するテーブル。「新規取引先申請」「与信審査申請」「アカウント開設申請」「請求設定申請」など、取引先マスタに対する登録・変更の**ワークフロー1件1件**がCaseとして記録される。
 
-これらは取引先マスタの直接的な構成要素ではなく、**マスタへの登録・更新を行うワークフローの管理単位**として存在する。申請者が Case を起票し、法務・進行がTaskを完了させることで Vendor や TransactionRelation などのマスタデータが登録・更新される。
+Case は取引先マスタ（Vendor等）そのものではなく、**マスタへの登録・更新を行うための申請と審査の管理単位**。申請者がCaseを起票し、法務・進行がCaseを処理することで、Vendor / TransactionRelation / BillingRelation などのマスタデータが登録・更新される。
+
+#### なぜ必要か
+
+- 「誰が・いつ・何を申請し、どの段階まで進んでいるか」を追跡するため
+- 法務の審査キューや進行のタスクキューは、Case のステータスでフィルタして一覧表示する
+- 申請の差し戻し・停止・却下の履歴を残し、KPI（平均処理時間・差し戻し率等）を計測するため
+- 1つのCaseは Vendor / TransactionRelation / BillingRelation をIDで参照しており、「この申請がどの法人・どの取引関係に対するものか」を紐づける
+
+#### 主なフィールド
+
+| フィールド | 型 | 説明 |
+|-----------|-----|------|
+| id | string | 案件ID（例: CASE-202504-000001） |
+| applicationType | string | 申請種別（下表参照） |
+| status | string | 案件ステータス（下表参照） |
+| company | string | 申請者の所属会社（MA, E, Cory等） |
+| applicant | string | 申請者名 |
+| department | string | 申請者の部署 |
+| vendorId | string | 関連する取引先（Vendor）のID |
+| transactionRelationId | string | 関連する取引関係のID |
+| billingRelationId | string | 関連する請求関係のID |
+| applicationData | object | 申請種別ごとに異なる入力内容（自由項目） |
+| isBlocked | boolean | 停止中かどうか |
+| blockReasonCodes | string[] | 停止理由コード（営業回答待ち、書類待ち等） |
+| dueDate | string | 期限 |
+| createdAt | string | 作成日時 |
+| updatedAt | string | 更新日時 |
+| completedAt | string | 完了日時 |
+
+#### 申請種別（applicationType）
+
+| 値 | 説明 |
+|----|------|
+| 新規取引先申請 | 新しい取引先の登録申請。Vendor / TransactionRelation が作成される |
+| 取引先情報変更申請 | 既存取引先の社名・住所・代表者等の変更。VendorHistory が記録される |
+| 取引関係の新規登録申請 | 既存取引先に対する新しい取引関係の追加 |
+| 取引関係の変更申請 | 既存取引関係の入金サイト・与信等の変更 |
+| 与信審査申請 | 新規または再審査。CreditCheck が記録される |
+| 与信金額変更申請 | 与信金額の増減申請 |
+| 入金サイト例外申請 | 入金サイトの標準外設定の申請 |
+| 出金サイト例外申請 | 出金サイトの標準外設定の申請 |
+| 反社再確認申請 | 反社チェックの再実施。AntisocialCheck が記録される |
+| UNIVERSEアカウント開設申請 | UNIVERSEアカウントの開設。Task が自動生成される |
+| Adsアカウント開設申請 | Adsアカウントの開設。Task が自動生成される |
+| 請求設定申請 | 請求関係の設定。BillingRelation / BillingDestination が登録される |
+
+#### 案件ステータス（status）
+
+| 値 | 説明 |
+|----|------|
+| 下書き | 申請者が入力中でまだ提出していない状態 |
+| 外部承認待ち | 外部申込で担当者の承認を待っている状態 |
+| 申請中 | 提出済みで受付・自動判定の段階 |
+| 審査中 | 法務が審査を進めている段階 |
+| 差し戻し中 | 不備があり申請者に修正を依頼している状態 |
+| 承認済み | 審査が完了し進行へ移る準備ができた状態 |
+| 進行中 | 進行管理Gが開設・請求設定などのタスクを実行中 |
+| 完了 | すべての処理が完了 |
+| 却下 | 審査の結果、申請が不承認となった状態 |
+| 停止中 | 営業回答待ち・書類待ち等の理由で一時停止 |
+
+#### データ例
+
+| id | applicationType | status | company | applicant | vendorId |
+|----|----------------|--------|---------|-----------|----------|
+| CASE-202504-000001 | 新規取引先申請 | 審査中 | MA | 田中太郎 | V-001 |
+| CASE-202504-000002 | Adsアカウント開設申請 | 進行中 | MA | 鈴木花子 | V-003 |
+| CASE-202504-000003 | 与信審査申請 | 完了 | E | 佐藤一郎 | V-001 |
+
+---
+
+### 3.15 Task（作業）
+
+#### このテーブルは何か
+
+Case（案件）に紐づく**個々の作業**を管理するテーブル。1つのCaseに対して、申請種別に応じた複数のTaskが自動生成される。法務・進行の担当者がTaskを1つずつ完了させていくことで案件が進行する。
+
+#### なぜ必要か
+
+- 案件全体の進捗は Case のステータスで管理するが、**具体的に何をやるか・誰がやるか・どこまで終わったか**はTask単位で管理する
+- 進行キューでは Task のステータスでレーン分け（Ads開設／Ads配信開始／請求設定／UNIVERSE開設 等）する
+- 1つのTaskが停止中（ブロック）の場合、停止理由コードで「営業回答待ち」「書類待ち」などを記録し、全体の滞留原因を可視化できる
+
+#### 主なフィールド
+
+| フィールド | 型 | 説明 |
+|-----------|-----|------|
+| id | string | 作業ID |
+| caseId | string | 紐づくCase（案件）のID |
+| name | string | 作業名（例: 反社チェック実行、Adsアカウント開設、請求設定） |
+| description | string | 作業の詳細説明 |
+| status | string | 作業ステータス（未着手 / 作業中 / 停止中 / 完了） |
+| assignedRole | string | 担当ロール（営業 / 法務 / 進行 / 管理者） |
+| assignedTo | string | 担当者名 |
+| blockReasonCode | string | 停止理由コード（営業回答待ち、書類待ち等） |
+| dueDate | string | 期限 |
+| startedAt | string | 作業開始日時 |
+| completedAt | string | 作業完了日時 |
+| createdAt | string | 作成日時 |
+| updatedAt | string | 更新日時 |
+
+#### Caseの申請種別ごとに生成されるTask例
+
+| 申請種別 | 自動生成されるTask |
+|----------|-------------------|
+| 新規取引先申請 | 取引先マスタ作成（法務）、反社確認（法務）、与信審査（法務）、取引関係作成（進行） |
+| 取引先情報変更申請 | 取引先情報更新（法務）、監査履歴記録（法務） |
+| Adsアカウント開設申請 | Adsアカウント開設（進行）、Ads配信開始設定（進行） |
+| UNIVERSEアカウント開設申請 | UNIVERSEアカウント開設（進行） |
+| 請求設定申請 | 請求関係設定（進行）、請求先・枝番登録（進行） |
+
+#### データ例
+
+| id | caseId | name | status | assignedRole | assignedTo |
+|----|--------|------|--------|-------------|------------|
+| TASK-001 | CASE-202504-000001 | 反社チェック実行 | 完了 | 法務 | 高平 |
+| TASK-002 | CASE-202504-000001 | 与信審査 | 作業中 | 法務 | 高平 |
+| TASK-003 | CASE-202504-000001 | 取引関係作成 | 未着手 | 進行 | （未割当） |
+| TASK-004 | CASE-202504-000002 | Adsアカウント開設 | 作業中 | 進行 | 進行担当A |
+| TASK-005 | CASE-202504-000002 | 請求関係設定 | 停止中 | 進行 | 進行担当A |
+
+- CASE-000001（新規取引先申請）は反社チェック完了、与信審査が作業中。取引関係作成は与信審査の完了待ちで未着手。
+- CASE-000002（Ads開設）はAds開設が作業中、請求設定は情報不足で停止中。
+
+#### CaseとTaskの関係
+
+```mermaid
+flowchart LR
+  Case["Case（案件）"]
+  T1["Task: 反社チェック"]
+  T2["Task: 与信審査"]
+  T3["Task: 取引関係作成"]
+  T4["Task: 請求設定"]
+
+  Case -->|"1件のCaseに複数Task"| T1
+  Case --> T2
+  Case --> T3
+  Case --> T4
+  T1 -->|"完了するとVendorを更新"| Vendor["Vendor"]
+  T2 -->|"完了するとTransactionRelationを更新"| TR["TransactionRelation"]
+  T3 -->|"完了するとCompanyVendorCodeを作成"| CVC["CompanyVendorCode"]
+  T4 -->|"完了するとBillingRelationを作成"| BR["BillingRelation"]
+```
 
 詳細は [ワークフローとデータフロー.md](./ワークフローとデータフロー.md) と [02_フェーズ1_仕様書.md](./02_フェーズ1_仕様書.md) を参照。
 
@@ -798,29 +942,29 @@ Vendor（法人マスタ）の**変更履歴**を記録するテーブル。社�
 ```mermaid
 flowchart TB
   subgraph applicant [申請者_営業]
-    A1["Case 起票\n申請フォームで入力"]
+    A1["Case起票（申請フォーム）"]
   end
 
   subgraph legal [法務部]
-    L1["Vendor\n法人マスタ登録・更新"]
-    L2["TransactionRelation\n取引関係登録・更新"]
-    L3["AntisocialCheck\n反社チェック結果登録"]
-    L4["CreditCheck\n与信チェック結果登録"]
-    L5["UnpaidRecord\n未入金記録登録"]
-    L6["ContractByDept\n事業部別契約登録"]
-    L7["VendorHistory\n変更履歴の自動記録+補足"]
+    L1["Vendor 法人マスタ登録・更新"]
+    L2["TransactionRelation 取引関係登録"]
+    L3["AntisocialCheck 反社チェック結果登録"]
+    L4["CreditCheck 与信チェック結果登録"]
+    L5["UnpaidRecord 未入金記録登録"]
+    L6["ContractByDept 事業部別契約登録"]
+    L7["VendorHistory 変更履歴記録"]
   end
 
   subgraph accounting [財務経理部]
-    F1["CompanyVendorCode\n取引先コード発番\n入金・出金経路"]
-    F2["会計システム連携\nOBIC / Money Forward"]
+    F1["CompanyVendorCode 取引先コード発番"]
+    F2["会計システム連携（OBIC / MFA）"]
   end
 
   subgraph ops [進行管理グループ]
-    O1["Agency\n代理店コード・代理店ID登録"]
-    O2["BillingRelation\n請求関係登録"]
-    O3["BillingDestination\n請求先・枝番登録"]
-    O4["CompanyVendorCode\n取引先コード発番\nアカウント申込経路"]
+    O1["Agency 代理店コード・ID登録"]
+    O2["BillingRelation 請求関係登録"]
+    O3["BillingDestination 請求先・枝番登録"]
+    O4["CompanyVendorCode 取引先コード発番"]
   end
 
   A1 -->|"申請提出"| L1
@@ -830,8 +974,8 @@ flowchart TB
   L1 --> L7
   L2 --> L5
   L2 --> L6
-  L1 -->|"審査完了\n取引先コード確認依頼"| F1
-  L2 -->|"審査完了\n進行タスク生成"| O1
+  L1 -->|"審査完了・コード確認依頼"| F1
+  L2 -->|"審査完了・進行タスク生成"| O1
   F1 --> F2
   F1 -->|"コード発番済み通知"| O2
   O1 --> O2
@@ -889,35 +1033,35 @@ flowchart TB
   end
 
   subgraph apps [申請管理システム]
-    BOT["取引先確認BOTs\nGoogleチャットアプリ"]
-    Jira["法務サービスデスク\nJira Cloud"]
-    AccountEntry["UNIVERSE/Ads\nアカウント申込画面"]
+    BOT["取引先確認BOTs（Googleチャット）"]
+    Jira["法務サービスデスク（Jira Cloud）"]
+    AccountEntry["UNIVERSE/Adsアカウント申込画面"]
     Formrun["受注管理 Formrun"]
-    Bakuraku1["バクラク申請\n会社ごとにテナント"]
-    Bakuraku2["バクラク債権・債務管理\n会社ごとにテナント"]
+    Bakuraku1["バクラク申請 ※会社ごと"]
+    Bakuraku2["バクラク債権・債務管理 ※会社ごと"]
   end
 
   subgraph checks [外部チェックサービス]
-    Roborobo["反社チェック\nRoborobo"]
-    RiskMonster["与信チェック\nリスクモンスター"]
+    Roborobo["反社チェック Roborobo"]
+    RiskMonster["与信チェック リスクモンスター"]
   end
 
-  subgraph legalGSS [法務部管理シート_GSS]
+  subgraph legalGSS [法務部管理シート]
     AntiList["反社チェックリスト"]
     CreditList["与信チェックリスト"]
-    ZenshaList["取引先別売掛金残高表\n全社リスト"]
+    ZenshaList["全社リスト"]
   end
 
-  subgraph vendorGSS [取引先管理表_GSS]
+  subgraph vendorGSS [取引先管理表]
     VendorMasterSheet["取引先管理シート"]
-    SalesMgmtSheet["販売管理シート /\n媒体支払シート /\nビジネス開発用シート"]
+    SalesMgmtSheet["販売管理/媒体支払/ビジネス開発用シート"]
   end
 
   SaikenBugyo["債権奉行"]
 
   subgraph acctSys [会計システム]
-    OBIC["OBIC\nMA/EH/cory/NewB"]
-    MFA["Money Forward会計\n上記以外"]
+    OBIC["OBIC（MA/EH/cory/NewB）"]
+    MFA["Money Forward会計（上記以外）"]
   end
 
   subgraph dataUse [データ利用]
@@ -953,33 +1097,46 @@ flowchart TB
 
 ### 9.2 アクション2: 新規取引開始のために申請（詳細）
 
-法務部が中心となる新規取引先の審査・登録フロー。
+法務部が中心となる新規取引先の審査・登録フロー。各ステップの担当者と内容は下表を参照。
 
 ```mermaid
 flowchart LR
-  Start["2-1. 申請\n担当: マイクロアド従業員\n内容: 新規取引・与信"]
-  Jira["法務サービスデスク\nJira Cloud"]
-  Roborobo["反社チェック\nRoborobo"]
-  AntiList["反社チェック\nリスト"]
-  CreditList["与信チェック\nリスト"]
+  Start["2-1 申請（従業員→Jira）"]
+  Jira["法務サービスデスク"]
+  Roborobo["反社チェック Roborobo"]
+  AntiList["反社チェックリスト"]
+  CreditList["与信チェックリスト"]
   RiskMonster["リスクモンスター"]
   ZenshaList["全社リスト"]
   VendorMasterSheet["取引先管理シート"]
   MANotice["MAお知らせ帖"]
-  Moretti[("DB Moretti\nBOT元データ")]
+  Moretti[("DB Moretti")]
 
-  Start -->|"2-1. 申請"| Jira
-  Jira -->|"2-2. インポート手作業\n担当: 法務部\n取引先情報"| Roborobo
-  Roborobo -->|"2-3. インポート手作業\n担当: 法務部\n反社チェック結果"| AntiList
-  Jira -->|"2-4. 登録手入力\n担当: 法務部\n取引先情報"| ZenshaList
-  Jira -->|"2-5. 手入力\n担当: 法務部\n法人番号・取引先情報"| CreditList
-  CreditList -->|"2-6. API連携\n法人番号・取引先情報"| RiskMonster
-  RiskMonster -->|"2-7. API連携\n与信格付け情報"| CreditList
-  CreditList -->|"2-8. 設定手入力\n与信情報"| ZenshaList
-  VendorMasterSheet -->|"2-9. 設定手作業\n担当: 法務部\n取引先コード"| ZenshaList
-  ZenshaList -->|"2-10. インポート手作業\n担当: 法務部\n取引先情報"| MANotice
+  Start -->|"2-1 申請"| Jira
+  Jira -->|"2-2 手作業インポート"| Roborobo
+  Roborobo -->|"2-3 反社結果を転記"| AntiList
+  Jira -->|"2-4 取引先情報を手入力"| ZenshaList
+  Jira -->|"2-5 法人番号等を手入力"| CreditList
+  CreditList -->|"2-6 API送信"| RiskMonster
+  RiskMonster -->|"2-7 与信格付け返却"| CreditList
+  CreditList -->|"2-8 与信情報を手入力"| ZenshaList
+  VendorMasterSheet -->|"2-9 取引先コードを設定"| ZenshaList
+  ZenshaList -->|"2-10 手作業インポート"| MANotice
   MANotice -->|"システム連携"| Moretti
 ```
+
+| ステップ | 担当 | 操作内容 |
+|----------|------|----------|
+| 2-1 | マイクロアド従業員 | Jiraで新規取引・与信を申請 |
+| 2-2 | 法務部 | 取引先情報をroboroboにインポート |
+| 2-3 | 法務部 | 反社チェック結果を反社チェックリストに転記 |
+| 2-4 | 法務部 | 取引先情報を全社リストに登録 |
+| 2-5 | 法務部 | 法人番号・取引先情報を与信チェックリストに入力 |
+| 2-6 | API | 法人番号等をリスクモンスターに送信 |
+| 2-7 | API | 与信格付け結果が返却される |
+| 2-8 | 法務部 | 与信情報を全社リストに設定 |
+| 2-9 | 法務部 | 取引先管理シートの取引先コードを全社リストに設定 |
+| 2-10 | 法務部 | 全社リストの取引先情報をMAお知らせ帖にインポート |
 
 ### 9.3 アクション3: アカウント申込（詳細）
 
@@ -987,21 +1144,30 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  Start["3-1. 申請\n担当: 顧客\n内容: アカウント"]
-  AccountEntry["UNIVERSE/Ads\n申込画面"]
-  Formrun["受注管理\nFormrun"]
+  Start["3-1 申込（顧客）"]
+  AccountEntry["UNIVERSE/Ads申込画面"]
+  Formrun["受注管理 Formrun"]
   ZenshaList["全社リスト"]
   SaikenBugyo["債権奉行"]
   SalesMgmtSheet["販売管理シート"]
   VendorMasterSheet["取引先管理シート"]
 
-  Start -->|"3-1. 申込"| AccountEntry
-  AccountEntry -->|"3-2. 承認\n担当: 営業担当者"| Formrun
-  Formrun -->|"3-3. 同名他社チェック手作業\n担当: 進行管理G"| ZenshaList
-  Formrun -->|"3-4. 代理店コード発番手作業\n担当: 進行管理G\n取引先情報"| SaikenBugyo
-  SaikenBugyo -->|"3-5. 代理店コード登録\n担当: 進行管理G\n取引先名・代理店コード"| SalesMgmtSheet
-  SalesMgmtSheet -->|"3-6. 取引先コード発番手作業\n担当: 財務経理部\n取引先名など"| VendorMasterSheet
+  Start -->|"3-1 申込"| AccountEntry
+  AccountEntry -->|"3-2 営業担当者が承認"| Formrun
+  Formrun -->|"3-3 同名他社チェック"| ZenshaList
+  Formrun -->|"3-4 代理店コード発番"| SaikenBugyo
+  SaikenBugyo -->|"3-5 代理店コード登録"| SalesMgmtSheet
+  SalesMgmtSheet -->|"3-6 取引先コード発番"| VendorMasterSheet
 ```
+
+| ステップ | 担当 | 操作内容 |
+|----------|------|----------|
+| 3-1 | 顧客（個人・法人） | UNIVERSE/Adsアカウント申込画面で申込 |
+| 3-2 | 営業担当者 | 申込を承認 → Formrunへ |
+| 3-3 | 進行管理G | 全社リストで同名他社チェック（手作業） |
+| 3-4 | 進行管理G | 債権奉行で代理店コード発番（手作業） |
+| 3-5 | 進行管理G | 代理店コード・取引先名を販売管理シートに登録 |
+| 3-6 | 財務経理部 | 取引先コード発番（手作業） → 取引先管理シートに登録 |
 
 ### 9.4 アクション4: 入金・出金のために申請（詳細）
 
@@ -1009,7 +1175,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  Start["4-1. 申請\n担当: マイクロアド従業員\n内容: 新規取引先"]
+  Start["4-1 申請（従業員）"]
   Bakuraku1["バクラク申請"]
   BOT["取引先確認BOTs"]
   Bakuraku2["バクラク債権・債務管理"]
@@ -1017,14 +1183,23 @@ flowchart LR
   OBIC["OBIC"]
   MFA["Money Forward会計"]
 
-  Start -->|"4-1. 申請"| Bakuraku1
-  Bakuraku1 -->|"4-2. 確認\n担当: 財務経理部\n取引先情報"| BOT
-  Bakuraku1 -->|"4-3. 承認\n担当: 財務経理部\n取引先情報"| Bakuraku2
-  Bakuraku2 -->|"4-4. 取引先コード発番手作業\n担当: 財務経理部\n取引先名など"| VendorMasterSheet
-  VendorMasterSheet -->|"4-5. 設定手作業\n担当: 財務経理部\n取引先コード"| Bakuraku2
-  Bakuraku2 -->|"4-6. CSVインポート手作業\n担当: 財務経理部\n取引先情報・コード"| OBIC
-  Bakuraku2 -->|"4-6. API連携\n担当: 財務経理部\n取引先情報・コード"| MFA
+  Start -->|"4-1 申請"| Bakuraku1
+  Bakuraku1 -->|"4-2 取引先確認"| BOT
+  Bakuraku1 -->|"4-3 承認"| Bakuraku2
+  Bakuraku2 -->|"4-4 取引先コード発番"| VendorMasterSheet
+  VendorMasterSheet -->|"4-5 取引先コード設定"| Bakuraku2
+  Bakuraku2 -->|"4-6 CSVインポート"| OBIC
+  Bakuraku2 -->|"4-6 API連携"| MFA
 ```
+
+| ステップ | 担当 | 操作内容 |
+|----------|------|----------|
+| 4-1 | マイクロアド従業員 | バクラクで新規取引先を申請 |
+| 4-2 | 財務経理部 | 取引先確認BOTで取引先情報を確認 |
+| 4-3 | 財務経理部 | バクラク申請を承認 |
+| 4-4 | 財務経理部 | 取引先管理シートで取引先コード発番（手作業） |
+| 4-5 | 財務経理部 | 取引先コードをバクラク債権・債務管理に設定 |
+| 4-6 | 財務経理部 | OBICにCSVインポート / Money ForwardにAPI連携 |
 
 ### 9.5 アクション1: 取引先登録有無の確認（詳細）
 
@@ -1032,15 +1207,15 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  Start["1. 取引先登録有無の確認\n担当: マイクロアド従業員"]
-  BOT["取引先確認BOTs\nGoogleチャットアプリ"]
+  Start["1. 取引先登録有無の確認"]
+  BOT["取引先確認BOTs"]
   Moretti[("DB Moretti")]
   ZenshaList["全社リスト"]
   MANotice["MAお知らせ帖"]
 
-  Start -->|"検索\n取引先情報・与信状況"| BOT
+  Start -->|"検索: 取引先情報・与信状況"| BOT
   BOT -->|"参照"| Moretti
-  ZenshaList -->|"インポート手作業\n担当: 法務部"| MANotice
+  ZenshaList -->|"手作業インポート（法務部）"| MANotice
   MANotice -->|"システム連携"| Moretti
 ```
 
